@@ -3475,7 +3475,104 @@ function h53(str, seed) { let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed; fo
 function normId(s) { s = String(s || '').trim().toLowerCase(); if (!s.includes('@')) { const d = s.replace(/\D/g, ''); if (d.length >= 8) return d.startsWith('0') ? '62' + d.slice(1) : d.startsWith('8') ? '62' + d : d; } return s.replace(/\s+/g, ''); }
 const normCode = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 function makeCode(id) { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let n = h53(_K + '|' + normId(id), 20261111), c = ''; for (let i = 0; i < 8; i++) { c += A[n % 32]; n = Math.floor(n / 32); } return c.slice(0, 4) + '-' + c.slice(4); }
-const kodeCocok = (id, code) => normId(id).length >= 5 && normCode(code).length === 8 && normCode(makeCode(id)) === normCode(code);
+const kodeCocok = (id, code) => !!LIS2.periksa(id, code);
+/* ===== LISENSI v2 (dipasang dari ~/Documents/Aplikasi/aktivasi/lisensi-h53-v2.tpl.js) =====
+   Kode v2 (sejak 12 Nov 2026): 3 huruf hari dibuat + 7 huruf HMAC-SHA256(_K, "MERIDIANKU|v2|hari|id"), XXXXX-XXXXX.
+   Berlaku 365 hari sejak dibuat (hari 0 = 1 Jan 2026). Kode lama 8 huruf (makeCode) tetap berlaku tanpa batas waktu.
+   LIS2.periksa(id, kode) → null | {selamanya, akhir};  LIS2.status(act) → {aktif, selamanya, habis, sampai, sisaHari} */
+const LIS2 = (function () {
+  'use strict';
+  var APP = 'MERIDIANKU', ALFA = '0123456789ABCDEFGHJKMNPQRSTVWXYZ', MASA = 365, EPOCH = Date.UTC(2026, 0, 1), HARI_MS = 86400000, SIMPAN = 'meridianku-lisensi-hari';
+  const sha256 = (() => {
+    const K = [], H0 = [];
+    let n = 2, c = 0;
+    const frac = x => ((x - Math.floor(x)) * 4294967296) >>> 0;
+    while (c < 64) {
+      let prime = true;
+      for (let d = 2; d * d <= n; d++) if (n % d === 0) { prime = false; break; }
+      if (prime) { if (c < 8) H0[c] = frac(Math.pow(n, 1 / 2)); K[c] = frac(Math.pow(n, 1 / 3)); c++; }
+      n++;
+    }
+    const rotr = (x, r) => (x >>> r) | (x << (32 - r));
+    return bytes => {
+      const l = bytes.length, bitLen = l * 8;
+      const total = ((l + 9 + 63) >> 6) << 6;
+      const m = new Uint8Array(total); m.set(bytes); m[l] = 0x80;
+      const dv = new DataView(m.buffer);
+      dv.setUint32(total - 4, bitLen >>> 0); dv.setUint32(total - 8, Math.floor(bitLen / 4294967296));
+      const h = H0.slice(), w = new Array(64);
+      for (let off = 0; off < total; off += 64) {
+        for (let i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4);
+        for (let i = 16; i < 64; i++) {
+          const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+          const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+          w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+        }
+        let [a, b, cc, d, e, f, g, hh] = h;
+        for (let i = 0; i < 64; i++) {
+          const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25), ch = (e & f) ^ (~e & g);
+          const t1 = (hh + S1 + ch + K[i] + w[i]) >>> 0;
+          const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22), maj = (a & b) ^ (a & cc) ^ (b & cc);
+          const t2 = (S0 + maj) >>> 0;
+          hh = g; g = f; f = e; e = (d + t1) >>> 0; d = cc; cc = b; b = a; a = (t1 + t2) >>> 0;
+        }
+        h[0] = (h[0] + a) >>> 0; h[1] = (h[1] + b) >>> 0; h[2] = (h[2] + cc) >>> 0; h[3] = (h[3] + d) >>> 0;
+        h[4] = (h[4] + e) >>> 0; h[5] = (h[5] + f) >>> 0; h[6] = (h[6] + g) >>> 0; h[7] = (h[7] + hh) >>> 0;
+      }
+      const out = new Uint8Array(32), odv = new DataView(out.buffer);
+      h.forEach((v, i) => odv.setUint32(i * 4, v));
+      return out;
+    };
+  })();
+  function hmac(key, msg) {
+    const k = new Uint8Array(64); k.set(key.length > 64 ? sha256(key) : key);
+    const ip = new Uint8Array(64 + msg.length), op = new Uint8Array(64 + 32);
+    for (let i = 0; i < 64; i++) { ip[i] = k[i] ^ 0x36; op[i] = k[i] ^ 0x5c; }
+    ip.set(msg, 64); op.set(sha256(ip), 64);
+    return sha256(op);
+  }
+  
+  function nk(s) { return String(s || '').toUpperCase().replace(/O/g, '0').replace(/[IL]/g, '1').replace(/[^0-9A-Z]/g, ''); }
+  function b32(mac, n) {
+    var bits = 0, val = 0, out = '';
+    for (var i = 0; i < mac.length && out.length < n; i++) {
+      val = ((val << 8) | mac[i]) & 0xffff; bits += 8;
+      while (bits >= 5 && out.length < n) { out += ALFA[(val >>> (bits - 5)) & 31]; bits -= 5; }
+    }
+    return out;
+  }
+  function kode2(id, hari) {
+    var tgl = ALFA[(hari >> 10) & 31] + ALFA[(hari >> 5) & 31] + ALFA[hari & 31];
+    var enc = new TextEncoder();
+    var out = tgl + b32(hmac(enc.encode(_K), enc.encode(APP + '|v2|' + hari + '|' + normId(id))), 7);
+    return out.slice(0, 5) + '-' + out.slice(5, 10);
+  }
+  function periksa(id, kode) {
+    if (normId(id).length < 5) return null;
+    var c = normCode(kode);
+    if (c.length === 8) return normCode(makeCode(id)) === c ? { selamanya: true, akhir: 0 } : null;
+    var k = nk(kode);
+    if (k.length !== 10) return null;
+    var hari = 0;
+    for (var i = 0; i < 3; i++) { var q = ALFA.indexOf(k.charAt(i)); if (q < 0) return null; hari = hari * 32 + q; }
+    return k === nk(kode2(id, hari)) ? { selamanya: false, akhir: hari + MASA } : null;
+  }
+  function tanggal(h) { return new Date(EPOCH + h * HARI_MS).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }); }
+  function hariIni() {
+    var d = new Date(), h = Math.floor((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - EPOCH) / HARI_MS), lalu = 0;
+    try { lalu = parseInt(localStorage.getItem(SIMPAN) || '0', 10) || 0; } catch (e) { }
+    if (h > lalu) { try { localStorage.setItem(SIMPAN, String(h)); } catch (e) { } return h; }
+    return lalu;
+  }
+  function status(act) {
+    var r = { aktif: false, selamanya: false, habis: false, sampai: '', sisaHari: 0 };
+    var p = act ? periksa(act.id, act.code) : null;
+    if (p && p.selamanya) { r.aktif = r.selamanya = true; }
+    else if (p) { r.sampai = tanggal(p.akhir); r.sisaHari = p.akhir - hariIni(); r.aktif = r.sisaHari >= 0; r.habis = !r.aktif; }
+    return r;
+  }
+  return { kode2: kode2, periksa: periksa, tanggal: tanggal, hariIni: hariIni, status: status, nk: nk };
+})();
 
 /* ---------- profil & hafalan ---------- */
 function profilBaru(name, av) { return { id: 'p' + Date.now().toString(36) + Math.floor(Math.random() * 1e5).toString(36), name, av, xp: 0, stats: {}, days: {}, streak: 0, best: 0, last: '', badges: [], kilat: 0, sempurna: 0, sesi: 0 }; }
@@ -3697,7 +3794,8 @@ let data = (() => {
 })();
 const P = () => data.profiles[data.cur];
 function simpan() { try { localStorage.setItem(KUNCI, JSON.stringify(data)); } catch (e) { } }
-const aktif = () => !!(data.act && kodeCocok(data.act.id, data.act.code));
+const lisensi = () => LIS2.status(data.act);
+const aktif = () => lisensi().aktif;
 const terbuka = m => aktif() || GRATIS.includes(m);
 function terapkanTema() { const r = document.documentElement; if (data.tema === 'auto') r.removeAttribute('data-theme'); else r.setAttribute('data-theme', data.tema); }
 
@@ -3789,7 +3887,7 @@ VIEW.beranda = () => {
   <div class="row"><button class="btn alt slim" data-act="ulang" ${lemah ? '' : 'disabled'}>🔁 Ulangi yang lemah<small>${lemah} titik</small></button>
     <button class="btn alt slim" data-act="kilat">⚡ Kuis kilat<small>60 detik</small></button></div>
   <button class="btn alt slim" data-act="tantangan">⚔️ Tantangan teman</button>
-  ${aktif() ? '' : `<div class="card" style="border-color:var(--c)"><b>🔓 Mode coba</b><p class="small" style="margin:4px 0 8px">Meridian Paru dan Usus Besar bisa dipakai gratis. Aktifkan untuk membuka semua 409 titik.</p><button class="btn slim" data-act="aktivasi">Aktifkan MeridianKu</button></div>`}
+  ${aktif() ? '' : `<div class="card" style="border-color:var(--c)"><b>${lisensi().habis ? '⏳ Lisensi berakhir' : '🔓 Mode coba'}</b><p class="small" style="margin:4px 0 8px">${lisensi().habis ? `Lisensi berakhir pada ${lisensi().sampai}. Meridian Paru dan Usus Besar tetap bisa dipakai. Perpanjang untuk membuka semua 409 titik lagi.` : 'Meridian Paru dan Usus Besar bisa dipakai gratis. Aktifkan untuk membuka semua 409 titik.'}</p><button class="btn slim" data-act="aktivasi">Aktifkan MeridianKu</button></div>`}
   <h2>Meridian</h2>
   <div class="grid">${MERIDIAN.map(m => { const h = hafalMer(p, m.k); return `<button class="mcard" style="--mc:${m.warna}" data-act="meridian" data-m="${m.k}">
       ${terbuka(m.k) ? '' : '<span class="lock">🔒</span>'}<span class="k">${m.k}</span><b>${m.nama}</b><span class="hz">${m.hz}</span>
@@ -3878,17 +3976,18 @@ VIEW.lainnya = () => {
   <button class="btn alt" data-act="penting">⚕️ Penting dibaca</button>
   <div class="card"><b>Tampilan</b><div class="row" style="margin-top:8px">${[['auto', 'Ikuti HP'], ['light', 'Terang'], ['dark', 'Gelap']].map(([k, n]) => `<button class="btn ${data.tema === k ? '' : 'alt'} slim" data-act="tema" data-v="${k}">${n}</button>`).join('')}</div>
     <div class="row"><button class="btn ${data.suara ? '' : 'alt'} slim" data-act="suara">${data.suara ? '🔊 Suara menyala' : '🔇 Suara mati'}</button></div></div>
-  <div class="card"><b>Aktivasi</b><p class="small" style="margin:4px 0 8px">${aktif() ? `✅ Aktif untuk ${esc(data.act.id)}` : 'Belum aktif: hanya meridian Paru dan Usus Besar yang terbuka.'}</p>
-    ${aktif() ? '' : '<button class="btn slim" data-act="aktivasi">Aktifkan</button>'}</div>
+  <div class="card"><b>Aktivasi</b><p class="small" style="margin:4px 0 8px">${aktif() ? `✅ Aktif untuk ${esc(data.act.id)}. ${lisensi().selamanya ? 'Berlaku tanpa batas waktu.' : `Berlaku sampai ${lisensi().sampai}.`}` : lisensi().habis ? `⏳ Lisensi berakhir pada ${lisensi().sampai}. Hanya meridian Paru dan Usus Besar yang terbuka.` : 'Belum aktif: hanya meridian Paru dan Usus Besar yang terbuka.'}</p>
+    ${aktif() ? '' : `<button class="btn slim" data-act="aktivasi">${lisensi().habis ? 'Perpanjang' : 'Aktifkan'}</button>`}</div>
   <p class="small" style="text-align:center">MeridianKu oleh Dokter Faiz · 409 titik (361 titik 14 meridian + 48 titik ekstra WHO)</p>` + navBawah();
 };
 
 /* ---------- lembar informasi ---------- */
 function halamanAktivasi() {
-  sheet(`<h2>🔓 Aktifkan MeridianKu</h2><p>Masukkan data dari pesan pembelian untuk membuka semua 15 kelompok titik.</p>
-  <div id="actf"><label for="aid">Email atau nomor WhatsApp</label><input id="aid" type="text" inputmode="email" autocomplete="email" placeholder="contoh: nama@gmail.com">
-  <label for="acode">Kode aktivasi</label><input id="acode" type="text" autocapitalize="characters" autocomplete="off" placeholder="ABCD-EF23" maxlength="12">
-  <button class="btn" data-act="aktifkan">Aktifkan</button></div><p class="small">Email/nomor WhatsApp dan kodenya ada di pesan yang Anda terima setelah membeli.</p>`);
+  const st = lisensi();
+  sheet(`<h2>${st.habis ? '⏳ Perpanjang lisensi MeridianKu' : '🔓 Aktifkan MeridianKu'}</h2><p>${st.habis ? `Lisensi berakhir pada ${st.sampai}. Masukkan kode perpanjangan untuk membuka semua 15 kelompok titik lagi. Progres belajar Anda tetap aman.` : 'Masukkan data dari pesan pembelian untuk membuka semua 15 kelompok titik.'}</p>
+  <div id="actf"><label for="aid">Email atau nomor WhatsApp</label><input id="aid" type="text" inputmode="email" autocomplete="email" placeholder="contoh: nama@gmail.com" value="${st.habis ? esc(data.act.id) : ''}">
+  <label for="acode">Kode aktivasi</label><input id="acode" type="text" autocapitalize="characters" autocomplete="off" placeholder="XXXXX-XXXXX" maxlength="14">
+  <button class="btn" data-act="aktifkan">${st.habis ? 'Perpanjang' : 'Aktifkan'}</button></div><p class="small">Email/nomor WhatsApp dan kodenya ada di pesan yang Anda terima setelah membeli. Satu kode berlaku 1 tahun sejak dibuat.</p>`);
 }
 function lembarPenting(pertama) {
   sheet(`<h2>⚕️ Sebelum mulai</h2>
@@ -4148,7 +4247,9 @@ document.addEventListener('click', e => {
       bagikan(`Aku dapat ${K.skor}/${K.soal.length} di kuis ${MODES[K.mode].nama} (${nama}) MeridianKu. Berani tanding? Masukkan kode ini di menu ⚔️ Tantangan teman: ${d.kode}`); break; }
     case 'aktivasi': halamanAktivasi(); break;
     case 'aktifkan': { const id = document.getElementById('aid').value, code = document.getElementById('acode').value;
-      if (kodeCocok(id, code)) { data.act = { id: normId(id), code: normCode(code) }; simpan(); tutupSheet(); konfeti(); SFX.selesai(); toast('MeridianKu aktif. Selamat belajar! 🎉'); tampil(); }
+      const p = LIS2.periksa(id, code);
+      if (p && !p.selamanya && p.akhir < LIS2.hariIni()) { document.getElementById('actf').classList.add('shake'); setTimeout(() => document.getElementById('actf')?.classList.remove('shake'), 400); toast(`Kode ini sudah berakhir pada ${LIS2.tanggal(p.akhir)}.`); }
+      else if (p) { data.act = { id: normId(id), code: p.selamanya ? normCode(code) : LIS2.nk(code) }; simpan(); tutupSheet(); konfeti(); SFX.selesai(); toast(p.selamanya ? 'MeridianKu aktif. Selamat belajar! 🎉' : `MeridianKu aktif sampai ${LIS2.tanggal(p.akhir)}. Selamat belajar! 🎉`); tampil(); }
       else { document.getElementById('actf').classList.add('shake'); setTimeout(() => document.getElementById('actf')?.classList.remove('shake'), 400); toast('Email/nomor atau kodenya belum cocok.'); } break; }
     case 'paham': data.paham = true; simpan(); tutupSheet(); break;
     case 'penting': lembarPenting(false); break;
